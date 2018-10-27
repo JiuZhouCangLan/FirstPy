@@ -7,23 +7,27 @@ from imageai.Prediction import ImagePrediction
 from imageai.Detection import ObjectDetection
 from PIL import Image, ImageTk
 from googletrans import Translator
+from tensorflow.python.keras import backend as bk
 import os
+import threading
+import tkinter.font as tkfont
+import keras
 
 root = Tk()
 root.title('AI对象识别')
-root.geometry('800x700')
 menubar = Menu(root)
 # 模式选择菜单及变量
 ProcessModeMenu = Menu(menubar, tearoff=0)
 ProcessMode = StringVar()
-ProcessModeName = ('图像预测', '对象检测', '视频对象检测和跟踪')
+ProcessModeName = ('图像预测', '对象检测')
 # 预测功能菜单及变量
 PredictionModelMenu = Menu(menubar, tearoff=0)
 PredictionModel = StringVar()
 PredictionModelName = ('SqueezeNet', 'ResNet50', 'InceptionV3', 'DenseNet121')
 PredictionModelPath = StringVar()
 PredictionResult = StringVar()
-PredictionLabel = Label(root, textvariable=PredictionResult)
+ft1 = tkfont.Font(size=16, weight=tkfont.BOLD)
+PredictionLabel = Label(root, textvariable=PredictionResult, font=ft1)
 PredictionSpeed = ('normal', 'fast', 'faster', 'fastest')
 # 检测功能菜单及变量
 DetectionMenu = Menu(menubar, tearoff=0)
@@ -73,7 +77,6 @@ def selectimage():
     global imagelabel
     global PredictionResult
     path_ = askopenfilename(filetypes=[("图片文件", "*.jpg;*.bmp;*.png")])
-    print(path_)
     if path_ != "":
         imagePath = path_
         img_open = Image.open(imagePath)
@@ -99,14 +102,16 @@ def zh_cn(source):
         return ""
 
 
-def process():
-    global imagePath
-    global ProcessMode
-    global PredictionSpeed
-    speedindex = SpeedSelector.get()
-    if ProcessMode.get() == '图像预测':
+class PredictionThread(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+
+    def run(self):
+        print("预测线程启动")
+        global PredictionResult
         global PredictionModelPath
         global PredictionResult
+        global PredictionSpeed
         prediction = ImagePrediction()
         PredictionResult.set('')
         if PredictionModel.get() == 'SqueezeNet':
@@ -124,31 +129,57 @@ def process():
         PredictionModelPath = prediction_model()
         print('模型路径：' + PredictionModelPath)
         prediction.setModelPath(PredictionModelPath)
-        print('识别速度'+PredictionSpeed[speedindex-1])
-        prediction.loadModel(prediction_speed=PredictionSpeed[speedindex-1])
+        speedindex = SpeedSelector.get()
+        print('识别速度' + PredictionSpeed[speedindex - 1])
+        bk.clear_session()
+        prediction.loadModel(prediction_speed=PredictionSpeed[speedindex - 1])
         predictions, probabilities = prediction.predictImage(imagePath, result_count=CountSelector.get())
         for eachPrediction, eachProbability in zip(predictions, probabilities):
             PredictionResult.set(PredictionResult.get() + "\n" +
                                  str(eachPrediction) + zh_cn(str(eachPrediction)) + " : " + str(eachProbability))
-    elif ProcessMode.get() == '对象检测':
+        print("预测线程结束")
+
+
+class DetectionThread(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+
+    def run(self):
+        print("对象检测线程启动")
         detector = ObjectDetection()
         detector.setModelTypeAsRetinaNet()
+        speedindex = SpeedSelector.get()
         detector.setModelPath(os.path.join(execution_path, "resnet50_coco_best_v2.0.1.h5"))
-        detector.loadModel()
+        detector.loadModel(detection_speed=PredictionSpeed[speedindex - 1])
         detections = detector.detectObjectsFromImage(input_image=imagePath,
-                                                     output_image_path=os.path.join(execution_path, "cache.jpg"))
+                                                     output_image_path=os.path.join(execution_path, "cache.jpg"),
+                                                     minimum_percentage_probability=(10 - CountSelector.get()) * 10)
         PredictionResult.set('')
         for eachObject in detections:
-            PredictionResult.set(PredictionResult.get()+str(eachObject["name"]) + zh_cn(str(eachObject["name"]))
-                                 + " : " + str(eachObject["percentage_probability"])+"\n")
+            PredictionResult.set(PredictionResult.get() + str(eachObject["name"]) + zh_cn(str(eachObject["name"]))
+                                 + " : " + str(eachObject["percentage_probability"]) + "\n")
         img_open = Image.open(os.path.join(execution_path, "cache.jpg"))
         h, w = img_open.size
         img_open.thumbnail((720, 720 * h / w))
         img = ImageTk.PhotoImage(img_open)
         imagelabel.config(image=img)
         imagelabel.image = img
-    elif ProcessMode.get() == '视频对象检测和跟踪':
-        print('视频对象检测和跟踪功能占位')
+        keras.backend.clear_session()
+        print("对象检测线程结束")
+
+
+def process():
+    global imagePath
+    global ProcessMode
+    global PredictionSpeed
+    if ProcessMode.get() == '图像预测':
+        predictionthread = PredictionThread()
+        predictionthread.setName("预测线程")
+        predictionthread.start()
+    elif ProcessMode.get() == '对象检测':
+        detectionthread = DetectionThread()
+        detectionthread.setName("检测线程")
+        detectionthread.start()
 
 
 btn_process = Button(root, text='执行', width=15, height=2, command=process)
